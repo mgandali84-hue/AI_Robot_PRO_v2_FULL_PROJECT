@@ -53,3 +53,6 @@ codemagic.yaml
 
 ## الحالة
 هذه حزمة تطوير v2 وليست ملف APK بحد ذاته. الذكاء السحابي يحتاج خادمًا ومفتاح API، والربط الحقيقي للمنزل الذكي يحتاج Home Assistant/MQTT أو مزود أجهزة.
+
+## Speech fix
+Uses `listenOptions: SpeechListenOptions(...)` for current speech_to_text APIs.

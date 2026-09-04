@@ -132,7 +132,7 @@ class RobotBrain {
     final ok = await speech.initialize();
     if (!ok) return false;
     await speech.listen(
-      options: stt.SpeechListenOptions(
+      listenOptions: stt.SpeechListenOptions(
         localeId: language == 'ar' ? 'ar_SA' : 'en_US',
       ),
       onResult: (result) {
