@@ -1,0 +1,27 @@
+plugins {
+    id "com.android.application"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "com.airobot.pro"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.airobot.pro"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = "2.0.0"
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.debug
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
