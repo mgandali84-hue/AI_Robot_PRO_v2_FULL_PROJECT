@@ -259,7 +259,9 @@ class _HomeScreenState extends State<HomeScreen>
     });
 
     await brain.speech.listen(
-      localeId: language == 'ar' ? 'ar_SA' : 'en_US',
+      listenOptions: stt.SpeechListenOptions(
+        localeId: language == 'ar' ? 'ar_SA' : 'en_US',
+      ),
       onResult: (r) {
         input.text = r.recognizedWords;
         setState(() {});
@@ -836,7 +838,7 @@ class RobotPainter extends CustomPainter {
     );
 
     final mouth = Paint()
-      ..color = cyan
+      ..color = Colors.cyanAccent
       ..style = PaintingStyle.stroke
       ..strokeWidth = state == RobotState.speaking ? 7 : 4
       ..strokeCap = StrokeCap.round;
