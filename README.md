@@ -56,3 +56,48 @@ codemagic.yaml
 
 ## Latest update: app icon
 The Android launcher icon now uses the approved AI Robot PRO v2 robot image. Standard density PNGs are included under `android/app/src/main/res/mipmap-*` and referenced by `@mipmap/ic_launcher`.
+
+## FIX4
+Corrected `speech_to_text` API usage from `options:` to `listenOptions:` for 7.4.x.
+
+## v2 3D Face Animation
+The project includes `assets/robot/ai_robot_pro_v2_animated.glb`, a real GLB with named node-animation clips: `Idle`, `Listening`, `Thinking`, `Speaking`, and `Happy`. The app switches animation clips as the assistant state changes.
+
+This is an animation-rig approach (node animations inside GLB), not morph-target facial blend shapes. The current robot asset has separate face components (eyes/smile), so the speaking clip animates the mouth component and the other clips animate the head/eyes/body components.
+
+## Lip Sync v2 update
+The robot now includes a GLB with actual mouth morph targets:
+`MouthOpen`, `MouthWide`, `MouthRound`.
+
+The app uses `flutter_tts` progress callbacks to map the current spoken word to
+`Mouth_A`, `Mouth_E`, `Mouth_O`, or `Mouth_Closed`, with a timed fallback. The current
+implementation is a text-derived phoneme heuristic, not a full acoustic phoneme
+neural recognizer. A true acoustic phoneme pipeline can later be substituted behind
+`PhonemeAnalyzer`.
+
+## Touch Emotion Update
+- Tap the robot: triggers a happy response and touch feedback.
+- Long press: triggers a thinking/affection response, speech, and animation.
+- The GLB remains pinch/drag interactive through `ModelViewer`.
+
+## Turn-by-turn Navigation Update
+The v2 project now has an OSRM-based routing screen with live GPS, map route drawing, spoken maneuvers, and automatic re-routing.
+
+## Phone Control
+AI Robot PRO v2 now includes an optional Android Accessibility Service.
+
+Supported actions:
+- Home
+- Back
+- Recent Apps
+- Notifications
+- Quick Settings
+- Screenshot (Android 11+)
+- Open Android Settings
+- Controlled tap gestures via the native accessibility service
+
+The service is opt-in. Android shows its Accessibility settings and the user must enable
+the service manually. This implementation does not run as hidden remote control and does
+not retrieve screen content (`canRetrieveWindowContent=false`).
+
+For actions that touch other apps, Android permission and OEM restrictions still apply.

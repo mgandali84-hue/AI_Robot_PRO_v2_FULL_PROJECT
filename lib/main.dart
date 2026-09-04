@@ -1,17 +1,13 @@
 
-import 'dart:convert';
+import 'dart:async';
 import 'dart:math' as math;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
-
-const aiServerUrl = String.fromEnvironment(
-  'AI_SERVER_URL',
-  defaultValue: '',
-);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,7 +28,7 @@ class AIRobotPROV2 extends StatelessWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF05080D),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF178BFF),
+          seedColor: const Color(0xFF21A7FF),
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
@@ -42,105 +38,93 @@ class AIRobotPROV2 extends StatelessWidget {
   }
 }
 
+enum RobotState { idle, listening, thinking, speaking, happy }
+
 class ChatItem {
   final String text;
   final bool robot;
   ChatItem(this.text, this.robot);
 }
 
-class RobotBrain {
+class PhoneControl {
+  static const MethodChannel channel =
+      MethodChannel('ai_robot_pro_v2/phone_control');
+
+  static Future<bool> enabled() async {
+    return await channel.invokeMethod<bool>('isAccessibilityEnabled') ?? false;
+  }
+
+  static Future<bool> settings() async {
+    return await channel.invokeMethod<bool>('openAccessibilitySettings') ?? false;
+  }
+
+  static Future<bool> action(String name) async {
+    return await channel.invokeMethod<bool>('action', {'name': name}) ?? false;
+  }
+}
+
+class AssistantBrain {
   final FlutterTts tts = FlutterTts();
   final stt.SpeechToText speech = stt.SpeechToText();
-  final List<String> memory = [];
   SharedPreferences? prefs;
+  final List<String> memory = [];
 
   Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
-    memory
-      ..clear()
-      ..addAll(prefs?.getStringList('memory') ?? []);
+    memory.addAll(prefs?.getStringList('memory') ?? const []);
     await tts.setSpeechRate(0.48);
     await tts.setPitch(1.0);
     await tts.setVolume(1.0);
   }
 
-  Future<String> ask(String prompt, String language) async {
-    if (aiServerUrl.isNotEmpty) {
-      try {
-        final response = await http
-            .post(
-              Uri.parse('$aiServerUrl/chat'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'message': prompt,
-                'language': language,
-                'memory': memory.take(30).toList(),
-              }),
-            )
-            .timeout(const Duration(seconds: 25));
-        if (response.statusCode >= 200 && response.statusCode < 300) {
-          final data = jsonDecode(response.body);
-          final answer = data['answer'];
-          if (answer is String && answer.trim().isNotEmpty) return answer.trim();
-        }
-      } catch (_) {}
+  Future<String> answer(String text, String language) async {
+    final t = text.toLowerCase();
+
+    if (t.contains('مرحبا') || t.contains('اهلا') || t.contains('hello') ||
+        t.contains('hi')) {
+      return language == 'ar'
+          ? 'أهلاً بك! أنا AI Robot PRO v2، مساعدك الشخصي.'
+          : 'Hello! I am AI Robot PRO v2, your personal assistant.';
     }
 
-    final p = prompt.toLowerCase();
-    if (p.contains('مرحبا') || p.contains('اهلا') || p.contains('hello') || p.contains('hi')) {
-      return language == 'ar'
-          ? 'أهلاً بك! أنا AI Robot PRO v2. كيف أستطيع مساعدتك؟'
-          : 'Hello! I am AI Robot PRO v2. How can I help you?';
-    }
-    if (p.contains('اسمك') || p.contains('name')) {
+    if (t.contains('اسمك') || t.contains('name')) {
       return language == 'ar'
           ? 'اسمي AI Robot PRO v2.'
           : 'My name is AI Robot PRO v2.';
     }
-    if (RegExp(r'(تذكر|احفظ|remember|save)', caseSensitive: false).hasMatch(prompt)) {
-      final value = prompt
-          .replaceFirst(RegExp(r'(تذكر|احفظ|remember|save)\s*', caseSensitive: false), '')
-          .trim();
+
+    final m = RegExp(
+      r'(?:تذكر|احفظ|remember|save)\s+(.+)',
+      caseSensitive: false,
+    ).firstMatch(text);
+
+    if (m != null) {
+      final value = m.group(1)?.trim() ?? '';
       if (value.isNotEmpty) {
         memory.add(value);
         await prefs?.setStringList('memory', memory);
       }
-      return language == 'ar' ? 'تم حفظ المعلومة في ذاكرتي.' : 'I saved that in my memory.';
+      return language == 'ar'
+          ? 'تم حفظ المعلومة في ذاكرتي.'
+          : 'Saved to my memory.';
     }
-    if (p.contains('ذاكرة') || p.contains('memory')) {
+
+    if (t.contains('ذاكرة') || t.contains('memory')) {
       return memory.isEmpty
-          ? (language == 'ar' ? 'لا توجد معلومات محفوظة حاليًا.' : 'There are no saved memories yet.')
+          ? (language == 'ar' ? 'ذاكرتي فارغة حاليًا.' : 'My memory is empty.')
           : (language == 'ar'
-              ? 'لدي ${memory.length} معلومة محفوظة.'
+              ? 'لدي ${memory.length} معلومات محفوظة.'
               : 'I have ${memory.length} saved memories.');
     }
+
     return language == 'ar'
-        ? 'أنا في وضع عدم الاتصال بالخادم السحابي حاليًا. اربط AI_SERVER_URL في البناء لتفعيل الذكاء الاصطناعي الحقيقي.'
-        : 'I am currently offline from the cloud AI server. Set AI_SERVER_URL at build time to enable the real AI service.';
+        ? 'أنا جاهز. اطلب مني فتح ميزة، التحدث معك، أو تنفيذ أحد أوامر الهاتف المسموحة.'
+        : 'I am ready. Ask me to open a feature, talk with you, or run an allowed phone action.';
   }
 
   Future<void> speak(String text, String language) async {
     await tts.setLanguage(language == 'ar' ? 'ar-SA' : 'en-US');
     await tts.speak(text);
-  }
-
-  Future<bool> startListening({
-    required String language,
-    required ValueChanged<String> onText,
-    required VoidCallback onDone,
-  }) async {
-    final ok = await speech.initialize();
-    if (!ok) return false;
-    await speech.listen(
-      options: stt.SpeechListenOptions(
-        localeId: language == 'ar' ? 'ar_SA' : 'en_US',
-      ),
-      onResult: (result) {
-        onText(result.recognizedWords);
-        if (result.finalResult) onDone();
-      },
-    );
-    return true;
   }
 }
 
@@ -153,110 +137,153 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
-  final brain = RobotBrain();
-  final messageController = TextEditingController();
+    with TickerProviderStateMixin {
+  final brain = AssistantBrain();
+  final input = TextEditingController();
   final messages = <ChatItem>[];
 
-  late final AnimationController pulse;
+  late final AnimationController avatarPulse;
+  late final AnimationController ringPulse;
+
   String language = 'ar';
-  String emotion = 'idle';
+  RobotState state = RobotState.idle;
   String character = 'Metal Classic';
   bool listening = false;
-  bool thinking = false;
-  int navIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    pulse = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+    avatarPulse = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+    ringPulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+
     brain.init().then((_) {
       setState(() {
-        messages.add(ChatItem(
-          language == 'ar'
-              ? 'مرحباً 👋 أنا مساعدك الشخصي. كيف أستطيع مساعدتك اليوم؟'
-              : 'Hello 👋 I am your personal assistant. How can I help today?',
-          true,
-        ));
+        messages.add(
+          ChatItem(
+            language == 'ar'
+                ? 'مرحباً 👋 أنا مساعدك الشخصي. كيف أستطيع مساعدتك اليوم؟'
+                : 'Hello 👋 I am your personal assistant. How can I help today?',
+            true,
+          ),
+        );
       });
     });
   }
 
   @override
   void dispose() {
-    pulse.dispose();
-    messageController.dispose();
+    avatarPulse.dispose();
+    ringPulse.dispose();
+    input.dispose();
     brain.tts.stop();
     super.dispose();
   }
 
-  Future<void> sendMessage([String? incoming]) async {
-    final text = (incoming ?? messageController.text).trim();
+  Future<void> send([String? value]) async {
+    final text = (value ?? input.text).trim();
     if (text.isEmpty) return;
-    messageController.clear();
+    input.clear();
+
+    // Built-in phone actions.
+    final p = text.toLowerCase();
+    if (p.contains('اذهب إلى الرئيسية') || p.contains('الشاشة الرئيسية') ||
+        p == 'home' || p.contains('go home')) {
+      setState(() {
+        messages.add(ChatItem(text, false));
+        state = RobotState.thinking;
+      });
+      final ok = await PhoneControl.action('home');
+      final reply = ok
+          ? (language == 'ar' ? 'تم الانتقال إلى الشاشة الرئيسية.' : 'Home screen opened.')
+          : (language == 'ar'
+              ? 'فعّل صلاحية التحكم بالهاتف أولًا من الإعدادات.'
+              : 'Enable phone control in settings first.');
+      setState(() {
+        state = RobotState.speaking;
+        messages.add(ChatItem(reply, true));
+      });
+      await brain.speak(reply, language);
+      if (mounted) setState(() => state = RobotState.happy);
+      return;
+    }
+
     setState(() {
       messages.add(ChatItem(text, false));
-      thinking = true;
-      emotion = 'thinking';
+      state = RobotState.thinking;
     });
-    final reply = await brain.ask(text, language);
-    if (!mounted) return;
+
+    await Future.delayed(const Duration(milliseconds: 300));
+    final reply = await brain.answer(text, language);
+
     setState(() {
-      thinking = false;
-      emotion = 'talking';
+      state = RobotState.speaking;
       messages.add(ChatItem(reply, true));
     });
     await brain.speak(reply, language);
-    if (mounted) setState(() => emotion = 'happy');
-    await Future.delayed(const Duration(milliseconds: 700));
-    if (mounted) setState(() => emotion = 'idle');
+
+    if (mounted) {
+      setState(() => state = RobotState.happy);
+      Future.delayed(const Duration(milliseconds: 900), () {
+        if (mounted) setState(() => state = RobotState.idle);
+      });
+    }
   }
 
   Future<void> toggleMic() async {
     if (listening) {
       await brain.speech.stop();
-      if (mounted) {
-        setState(() {
-          listening = false;
-          emotion = 'idle';
-        });
-      }
+      setState(() {
+        listening = false;
+        state = RobotState.idle;
+      });
       return;
     }
+
+    final ok = await brain.speech.initialize();
+    if (!ok) {
+      _snack(language == 'ar'
+          ? 'الميكروفون أو التعرف على الكلام غير متاح.'
+          : 'Microphone or speech recognition is unavailable.');
+      return;
+    }
+
     setState(() {
       listening = true;
-      emotion = 'listening';
+      state = RobotState.listening;
     });
-    final ok = await brain.startListening(
-      language: language,
-      onText: (text) {
-        messageController.text = text;
+
+    await brain.speech.listen(
+      localeId: language == 'ar' ? 'ar_SA' : 'en_US',
+      onResult: (r) {
+        input.text = r.recognizedWords;
         setState(() {});
-      },
-      onDone: () {
-        if (mounted) {
+        if (r.finalResult && r.recognizedWords.trim().isNotEmpty) {
+          brain.speech.stop();
           setState(() => listening = false);
-          if (messageController.text.trim().isNotEmpty) sendMessage();
+          send(r.recognizedWords);
         }
       },
     );
-    if (!ok && mounted) {
-      setState(() {
-        listening = false;
-        emotion = 'idle';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(language == 'ar'
-              ? 'تعذر تشغيل الميكروفون. تأكد من صلاحية الميكروفون.'
-              : 'Microphone unavailable. Check microphone permission.'),
-        ),
-      );
-    }
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   void openCamera() {
-    if (widget.cameras.isEmpty) return;
+    if (widget.cameras.isEmpty) {
+      _snack(language == 'ar' ? 'لا توجد كاميرا.' : 'No camera available.');
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -265,45 +292,138 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  void showMemory() {
+  void openMemory() {
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0B121B),
       builder: (_) => StatefulBuilder(
-        builder: (ctx, setSheet) {
+        builder: (ctx, setSheet) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  language == 'ar' ? '🧠 ذاكرتي' : '🧠 My Memory',
+                  style: const TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: brain.memory.isEmpty
+                      ? Text(language == 'ar'
+                          ? 'لا توجد معلومات محفوظة.'
+                          : 'No saved memories.')
+                      : ListView(
+                          shrinkWrap: true,
+                          children: brain.memory.reversed
+                              .map((m) => ListTile(
+                                    leading: const Icon(Icons.bookmark_outline),
+                                    title: Text(m),
+                                  ))
+                              .toList(),
+                        ),
+                ),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: () async {
+                    brain.memory.clear();
+                    await brain.prefs?.setStringList('memory', brain.memory);
+                    setSheet(() {});
+                    setState(() {});
+                  },
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: Text(language == 'ar' ? 'مسح الذاكرة' : 'Clear memory'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void openCharacters() {
+    const chars = [
+      ('Metal Classic', '🤖', 'المساعد الشخصي'),
+      ('Space AI', '🚀', 'المستكشف'),
+      ('Teacher Bot', '📚', 'المعلّم'),
+      ('Friend Bot', '😊', 'الرفيق'),
+    ];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0B121B),
+      builder: (_) => ListView(
+        padding: const EdgeInsets.all(12),
+        children: chars
+            .map(
+              (c) => ListTile(
+                leading: Text(c.$2, style: const TextStyle(fontSize: 28)),
+                title: Text(c.$1),
+                subtitle: Text(c.$3),
+                trailing: character == c.$1
+                    ? const Icon(Icons.check_circle, color: Colors.cyanAccent)
+                    : null,
+                onTap: () async {
+                  setState(() => character = c.$1);
+                  await brain.prefs?.setString('character', character);
+                  if (mounted) Navigator.pop(context);
+                },
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+
+  void openPhoneControl() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0B121B),
+      builder: (_) => FutureBuilder<bool>(
+        future: PhoneControl.enabled(),
+        builder: (ctx, snap) {
+          final enabled = snap.data == true;
           return SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(18),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+              child: Wrap(
+                runSpacing: 10,
                 children: [
-                  Text(language == 'ar' ? '🧠 الذاكرة الشخصية' : '🧠 Personal Memory',
-                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 12),
-                  if (brain.memory.isEmpty)
-                    Text(language == 'ar' ? 'الذاكرة فارغة.' : 'Memory is empty.')
-                  else
-                    SizedBox(
-                      height: 300,
-                      child: ListView(
-                        children: brain.memory.reversed
-                            .map((m) => ListTile(
-                                  leading: const Icon(Icons.bookmark_outline),
-                                  title: Text(m),
-                                ))
-                            .toList(),
-                      ),
+                  ListTile(
+                    leading: Icon(
+                      enabled ? Icons.verified_user : Icons.lock_outline,
+                      color: enabled ? Colors.greenAccent : Colors.orangeAccent,
                     ),
-                  FilledButton.icon(
-                    onPressed: () async {
-                      brain.memory.clear();
-                      await brain.prefs?.setStringList('memory', brain.memory);
-                      setSheet(() {});
-                      setState(() {});
-                    },
-                    icon: const Icon(Icons.delete_sweep),
-                    label: Text(language == 'ar' ? 'حذف الذاكرة' : 'Clear memory'),
+                    title: Text(
+                      language == 'ar'
+                          ? (enabled ? 'التحكم مفعّل' : 'التحكم غير مفعّل')
+                          : (enabled ? 'Control enabled' : 'Control disabled'),
+                    ),
+                    subtitle: Text(
+                      language == 'ar'
+                          ? 'يجب تفعيل Accessibility يدويًا من Android.'
+                          : 'Android Accessibility must be enabled manually.',
+                    ),
                   ),
+                  FilledButton.icon(
+                    onPressed: () => PhoneControl.settings(),
+                    icon: const Icon(Icons.settings_accessibility),
+                    label: Text(language == 'ar'
+                        ? 'فتح إعدادات إمكانية الوصول'
+                        : 'Open Accessibility settings'),
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      _ChipAction('Home', 'home'),
+                      _ChipAction('Back', 'back'),
+                      _ChipAction('Recents', 'recents'),
+                      _ChipAction('Notifications', 'notifications'),
+                    ],
+                  )
                 ],
               ),
             ),
@@ -313,63 +433,53 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  void showCharacters() {
-    final chars = [
-      ('Metal Classic', '🤖', 'مساعد شخصي'),
-      ('Space AI', '🚀', 'مستكشف'),
-      ('Teacher Bot', '📚', 'تعليمي'),
-      ('Friend Bot', '😊', 'رفيق'),
-    ];
-    showModalBottomSheet(
-      context: context,
-      builder: (_) => ListView(
-        padding: const EdgeInsets.all(12),
-        children: chars.map((c) {
-          return ListTile(
-            leading: Text(c.$2, style: const TextStyle(fontSize: 28)),
-            title: Text(c.$1),
-            subtitle: Text(c.$3),
-            trailing: character == c.$1 ? const Icon(Icons.check_circle, color: Colors.cyan) : null,
-            onTap: () async {
-              setState(() => character = c.$1);
-              await brain.prefs?.setString('character', character);
-              if (mounted) Navigator.pop(context);
-            },
-          );
-        }).toList(),
-      ),
+  Widget _ChipAction(String label, String action) {
+    return ActionChip(
+      label: Text(label),
+      onPressed: () async {
+        final ok = await PhoneControl.action(action);
+        _snack(ok
+            ? '$label OK'
+            : (language == 'ar'
+                ? 'تعذر تنفيذ الأمر.'
+                : 'Action failed.'));
+      },
     );
   }
 
-  void showSmartHome() {
-    final devices = <String, bool>{
-      'الإضاءة': false,
-      'التلفاز': false,
-      'التكييف': false,
-    };
+  void openTools() {
     showModalBottomSheet(
       context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (_, setSheet) => ListView(
-          padding: const EdgeInsets.all(18),
+      backgroundColor: const Color(0xFF0B121B),
+      builder: (_) => SafeArea(
+        child: Wrap(
           children: [
-            const Text('🏠 Smart Home',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            ...devices.keys.map((d) => SwitchListTile(
-                  title: Text(d),
-                  value: devices[d]!,
-                  onChanged: (v) {
-                    devices[d] = v;
-                    setSheet(() {});
-                  },
-                )),
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                'واجهة التحكم جاهزة للربط مع Home Assistant أو MQTT. الأجهزة الحالية محاكاة.',
-                style: TextStyle(color: Colors.white60),
-              ),
+            ListTile(
+              leading: const Icon(Icons.explore, color: Colors.cyanAccent),
+              title: Text(language == 'ar' ? 'البوصلة' : 'Compass'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const CompassPage()));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.wb_sunny, color: Colors.cyanAccent),
+              title: Text(language == 'ar' ? 'الطقس والحرارة' : 'Weather & Temperature'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const WeatherDemoPage()));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.map_outlined, color: Colors.cyanAccent),
+              title: Text(language == 'ar' ? 'الخرائط والملاحة' : 'Maps & Navigation'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const MapDemoPage()));
+              },
             ),
           ],
         ),
@@ -379,114 +489,141 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    final rtl = language == 'ar';
+    final ar = language == 'ar';
     return Directionality(
-      textDirection: rtl ? TextDirection.rtl : TextDirection.ltr,
+      textDirection: ar ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
-        backgroundColor: const Color(0xFF05080D),
         appBar: AppBar(
           backgroundColor: Colors.transparent,
-          centerTitle: true,
+          elevation: 0,
           title: RichText(
             text: const TextSpan(
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
+              style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
               children: [
                 TextSpan(text: 'AI Robot '),
-                TextSpan(text: 'PRO v2', style: TextStyle(color: Colors.cyanAccent)),
+                TextSpan(
+                  text: 'PRO v2',
+                  style: TextStyle(color: Colors.cyanAccent),
+                ),
               ],
             ),
           ),
-          leading: IconButton(onPressed: showCharacters, icon: const Icon(Icons.menu)),
+          leading: IconButton(
+            onPressed: openCharacters,
+            icon: const Icon(Icons.smart_toy_outlined),
+          ),
           actions: [
-            IconButton(onPressed: () => setState(() => language = language == 'ar' ? 'en' : 'ar'),
-                icon: Text(language == 'ar' ? 'EN' : 'ع')),
+            IconButton(
+              onPressed: () => setState(
+                () => language = language == 'ar' ? 'en' : 'ar',
+              ),
+              icon: Text(ar ? 'EN' : 'ع'),
+            ),
+            IconButton(
+              onPressed: openMemory,
+              icon: const Icon(Icons.psychology_alt_outlined),
+            ),
           ],
         ),
         body: Column(
           children: [
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                Chip(
-                  avatar: const CircleAvatar(radius: 5, backgroundColor: Colors.greenAccent),
-                  label: const Text('ONLINE'),
-                ),
-                Text(character, style: const TextStyle(color: Colors.white70)),
-              ],
-            ),
-            SizedBox(
-              height: 420,
-              child: AnimatedBuilder(
-                animation: pulse,
-                builder: (_, __) => CustomPaint(
-                  painter: InteractiveRobotPainter(
-                    t: pulse.value,
-                    emotion: emotion,
-                    listening: listening,
-                  ),
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 340),
-                      child: Text(
-                        emotion == 'thinking'
-                            ? (rtl ? 'أفكر...' : 'Thinking...')
-                            : emotion == 'listening'
-                                ? (rtl ? 'أستمع إليك...' : 'Listening...')
-                                : emotion == 'talking'
-                                    ? (rtl ? 'أتحدث...' : 'Speaking...')
-                                    : (rtl ? 'كيف أساعدك؟' : 'How can I help?'),
-                        style: const TextStyle(
-                          fontSize: 18,
-                          color: Colors.cyanAccent,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  ...messages.map((m) => Align(
-                        alignment: m.robot ? Alignment.centerLeft : Alignment.centerRight,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 5),
-                          padding: const EdgeInsets.all(13),
-                          constraints: const BoxConstraints(maxWidth: 350),
-                          decoration: BoxDecoration(
-                            color: m.robot ? const Color(0xFF101A25) : const Color(0xFF0C2C40),
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: m.robot
-                                  ? Colors.white12
-                                  : Colors.cyanAccent.withValues(alpha: .18),
-                            ),
-                          ),
-                          child: Text(m.text, style: const TextStyle(fontSize: 15.5)),
-                        ),
-                      )),
-                  if (thinking)
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: EdgeInsets.all(8),
-                        child: Text('•••', style: TextStyle(color: Colors.cyanAccent, fontSize: 25)),
-                      ),
+                  const Chip(
+                    avatar: CircleAvatar(
+                      radius: 5,
+                      backgroundColor: Colors.greenAccent,
                     ),
+                    label: Text('ONLINE'),
+                  ),
+                  Text(character, style: const TextStyle(color: Colors.white70)),
                 ],
               ),
             ),
+            Expanded(
+              flex: 6,
+              child: AnimatedBuilder(
+                animation: Listenable.merge([avatarPulse, ringPulse]),
+                builder: (_, __) => GestureDetector(
+                  onTap: () async {
+                    setState(() => state = RobotState.happy);
+                    final reply = ar
+                        ? 'أشعر بلمستك 😊'
+                        : 'I can feel your touch 😊';
+                    messages.add(ChatItem(reply, true));
+                    await brain.speak(reply, language);
+                    if (mounted) setState(() => state = RobotState.idle);
+                  },
+                  onLongPress: () {
+                    setState(() => state = RobotState.thinking);
+                    final reply = ar
+                        ? 'أنا هنا معك 🤖❤️'
+                        : 'I am here with you 🤖❤️';
+                    messages.add(ChatItem(reply, true));
+                    brain.speak(reply, language);
+                  },
+                  child: CustomPaint(
+                    painter: RobotPainter(
+                      t: avatarPulse.value,
+                      ring: ringPulse.value,
+                      state: state,
+                    ),
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 310),
+                        child: Text(
+                          state == RobotState.listening
+                              ? (ar ? 'أستمع إليك...' : 'Listening...')
+                              : state == RobotState.thinking
+                                  ? (ar ? 'أفكر...' : 'Thinking...')
+                                  : state == RobotState.speaking
+                                      ? (ar ? 'أتحدث...' : 'Speaking...')
+                                      : (ar ? 'كيف أساعدك؟' : 'How can I help?'),
+                          style: const TextStyle(
+                            color: Colors.cyanAccent,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (messages.isNotEmpty)
+              SizedBox(
+                height: 155,
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  children: messages.reversed.take(4).map((m) {
+                    return Align(
+                      alignment:
+                          m.robot ? Alignment.centerLeft : Alignment.centerRight,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 3),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: m.robot
+                              ? const Color(0xFF0E1B28)
+                              : const Color(0xFF0B3447),
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: Text(m.text),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
             SafeArea(
               top: false,
               child: Container(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                padding: const EdgeInsets.fromLTRB(12, 7, 12, 10),
                 decoration: const BoxDecoration(
-                  color: Color(0xFF081019),
-                  border: Border(top: BorderSide(color: Colors.white10)),
+                  color: Color(0xFF081018),
+                  border: Border(top: BorderSide(color: Colors.white12)),
                 ),
                 child: Column(
                   children: [
@@ -495,45 +632,52 @@ class _HomeScreenState extends State<HomeScreen>
                         IconButton.filled(
                           onPressed: toggleMic,
                           style: IconButton.styleFrom(
-                            backgroundColor: listening ? Colors.redAccent : const Color(0xFF1266CC),
+                            backgroundColor: listening
+                                ? Colors.redAccent
+                                : const Color(0xFF156FD2),
                           ),
                           icon: Icon(listening ? Icons.stop : Icons.mic),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 7),
                         Expanded(
                           child: TextField(
-                            controller: messageController,
-                            onSubmitted: (_) => sendMessage(),
+                            controller: input,
+                            minLines: 1,
+                            maxLines: 3,
+                            onSubmitted: (_) => send(),
                             decoration: InputDecoration(
-                              hintText: rtl ? 'اكتب رسالتك...' : 'Type your message...',
+                              hintText:
+                                  ar ? 'تحدث أو اكتب...' : 'Speak or type...',
                               filled: true,
-                              fillColor: const Color(0xFF0D141D),
+                              fillColor: const Color(0xFF0C151F),
                               border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(18),
+                                borderRadius: BorderRadius.circular(17),
                                 borderSide: BorderSide.none,
                               ),
                             ),
                           ),
                         ),
-                        const SizedBox(width: 8),
                         IconButton(
-                          onPressed: () => sendMessage(),
+                          onPressed: () => send(),
                           icon: const Icon(Icons.send_rounded),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _QuickAction(icon: Icons.chat_bubble_outline, text: rtl ? 'المحادثة' : 'Chat',
-                            onTap: () => setState(() => navIndex = 1)),
-                        _QuickAction(icon: Icons.camera_alt_outlined, text: rtl ? 'الرؤية' : 'Vision',
-                            onTap: openCamera),
-                        _QuickAction(icon: Icons.psychology_outlined, text: rtl ? 'الذاكرة' : 'Memory',
-                            onTap: showMemory),
-                        _QuickAction(icon: Icons.home_outlined, text: rtl ? 'المنزل' : 'Home',
-                            onTap: showSmartHome),
-                      ],
+                    const SizedBox(height: 7),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _NavButton(Icons.camera_alt_outlined,
+                              ar ? 'رؤية' : 'Vision', openCamera),
+                          _NavButton(Icons.psychology_outlined,
+                              ar ? 'ذاكرة' : 'Memory', openMemory),
+                          _NavButton(Icons.navigation_outlined,
+                              ar ? 'ملاحة' : 'Nav', openTools),
+                          _NavButton(Icons.phone_android_outlined,
+                              ar ? 'الهاتف' : 'Phone', openPhoneControl),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -544,148 +688,210 @@ class _HomeScreenState extends State<HomeScreen>
       ),
     );
   }
-}
 
-class _QuickAction extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  final VoidCallback onTap;
-  const _QuickAction({required this.icon, required this.text, required this.onTap});
-  @override
-  Widget build(BuildContext context) => Expanded(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 3),
-          child: OutlinedButton(
-            onPressed: onTap,
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              side: const BorderSide(color: Colors.white12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            ),
-            child: Column(
-              children: [
-                Icon(icon, size: 22, color: Colors.cyanAccent),
-                const SizedBox(height: 3),
-                Text(text, overflow: TextOverflow.ellipsis),
-              ],
-            ),
+  Widget _NavButton(IconData icon, String text, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 18, color: Colors.cyanAccent),
+        label: Text(text),
+        style: OutlinedButton.styleFrom(
+          side: const BorderSide(color: Colors.white12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
-class InteractiveRobotPainter extends CustomPainter {
+class RobotPainter extends CustomPainter {
   final double t;
-  final String emotion;
-  final bool listening;
-  InteractiveRobotPainter({required this.t, required this.emotion, required this.listening});
+  final double ring;
+  final RobotState state;
+
+  RobotPainter({required this.t, required this.ring, required this.state});
 
   @override
   void paint(Canvas c, Size s) {
     final x = s.width / 2;
     final bob = math.sin(t * math.pi * 2) * 5;
+
     c.save();
-    c.translate(x, 20 + bob);
+    c.translate(x, 15 + bob);
 
     final glow = Paint()
-      ..color = Colors.cyanAccent.withValues(alpha: .09)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 42);
-    c.drawCircle(const Offset(0, 165), 125, glow);
+      ..color = Colors.cyanAccent.withValues(alpha: 0.08)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 35);
+    c.drawCircle(const Offset(0, 170), 118, glow);
 
-    final metal = Paint()
-      ..shader = const LinearGradient(
-        colors: [Color(0xFFF1F5F8), Color(0xFF89939C), Color(0xFF272E35)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ).createShader(const Rect.fromLTWH(-120, 0, 240, 290));
-
-    final dark = Paint()..color = const Color(0xFF0B1118);
-    final cyan = Paint()..color = Colors.cyanAccent;
-
-    // torso
-    c.drawRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTWH(-88, 185, 176, 150), const Radius.circular(42)), metal);
-    // shoulders
-    c.drawCircle(const Offset(-92, 215), 34, metal);
-    c.drawCircle(const Offset(92, 215), 34, metal);
-    // arms
-    final armY = math.sin(t * math.pi * 2) * 7;
-    c.save(); c.translate(-118, 240); c.rotate(-0.06 + armY * .006);
-    c.drawRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTWH(-15, -5, 31, 110), const Radius.circular(15)), metal);
-    c.restore();
-    c.save(); c.translate(118, 240); c.rotate(0.06 - armY * .006);
-    c.drawRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTWH(-16, -5, 31, 110), const Radius.circular(15)), metal);
-    c.restore();
-
-    // core
-    c.drawCircle(const Offset(0, 245), 28, dark);
-    c.drawCircle(const Offset(0, 245), 14 + math.sin(t * math.pi * 4) * 2, cyan);
-
-    // neck
-    c.drawRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTWH(-25, 145, 50, 55), const Radius.circular(15)), dark);
-
-    // head
-    c.drawRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTWH(-105, 15, 210, 135), const Radius.circular(48)), metal);
-    c.drawRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTWH(-80, 35, 160, 92), const Radius.circular(32)), dark);
-
-    final eyeBaseY = 78.0;
-    final eyeX = emotion == 'thinking' ? 7.0 : 0.0;
-    final eyeW = emotion == 'talking' ? 30.0 : 34.0;
-    c.drawOval(Rect.fromCenter(center: Offset(-35 + eyeX, eyeBaseY), width: eyeW, height: 22), cyan);
-    c.drawOval(Rect.fromCenter(center: Offset(35 + eyeX, eyeBaseY), width: eyeW, height: 22), cyan);
-
-    final mouth = Paint()
-      ..color = Colors.cyanAccent
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = emotion == 'talking' ? 7 : 4;
-    final path = Path();
-    if (emotion == 'happy') {
-      path.moveTo(-25, 109); path.quadraticBezierTo(0, 130, 25, 109);
-    } else if (emotion == 'thinking') {
-      path.moveTo(-18, 113); path.quadraticBezierTo(0, 107, 18, 113);
-    } else if (emotion == 'talking') {
-      c.drawOval(Rect.fromCenter(
-        center: const Offset(0, 112),
-        width: 30,
-        height: 13 + math.sin(t * math.pi * 10).abs() * 8,
-      ), mouth);
-    } else {
-      path.moveTo(-20, 112); path.lineTo(20, 112);
-    }
-    if (emotion != 'talking') c.drawPath(path, mouth);
-
-    // listening ring
-    if (listening) {
-      final ring = Paint()
+    if (state == RobotState.listening) {
+      final p = Paint()
         ..color = Colors.cyanAccent.withValues(alpha: .35)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3;
-      final r = 125 + math.sin(t * math.pi * 2) * 8;
-      c.drawCircle(const Offset(0, 82), r, ring);
+      c.drawCircle(
+        const Offset(0, 85),
+        125 + ring * 14,
+        p,
+      );
     }
+
+    final metal = Paint()
+      ..shader = const LinearGradient(
+        colors: [
+          Color(0xFFF1F5F8),
+          Color(0xFF858F98),
+          Color(0xFF262D35),
+        ],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ).createShader(const Rect.fromLTWH(-130, 0, 260, 330));
+    final dark = Paint()..color = const Color(0xFF0A1118);
+    final cyan = Paint()..color = Colors.cyanAccent;
+
+    // Body
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-87, 175, 174, 150),
+        const Radius.circular(40),
+      ),
+      metal,
+    );
+
+    // Arms
+    final arm = math.sin(t * math.pi * 2) * 8;
+    c.save();
+    c.translate(-112, 205);
+    c.rotate(-0.05 + arm * .006);
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-15, 0, 30, 112),
+        const Radius.circular(15),
+      ),
+      metal,
+    );
+    c.restore();
+    c.save();
+    c.translate(112, 205);
+    c.rotate(0.05 - arm * .006);
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-15, 0, 30, 112),
+        const Radius.circular(15),
+      ),
+      metal,
+    );
+    c.restore();
+
+    // Core
+    c.drawCircle(const Offset(0, 245), 28, dark);
+    c.drawCircle(
+      const Offset(0, 245),
+      14 + math.sin(t * math.pi * 4) * 2,
+      cyan,
+    );
+
+    // Neck + head
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-26, 140, 52, 48),
+        const Radius.circular(14),
+      ),
+      dark,
+    );
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-105, 10, 210, 132),
+        const Radius.circular(48),
+      ),
+      metal,
+    );
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-79, 31, 158, 90),
+        const Radius.circular(30),
+      ),
+      dark,
+    );
+
+    final eyeShift = state == RobotState.thinking ? 7.0 : 0.0;
+    c.drawOval(
+      Rect.fromCenter(
+        center: Offset(-35 + eyeShift, 74),
+        width: 34,
+        height: state == RobotState.happy ? 15 : 21,
+      ),
+      cyan,
+    );
+    c.drawOval(
+      Rect.fromCenter(
+        center: Offset(35 + eyeShift, 74),
+        width: 34,
+        height: state == RobotState.happy ? 15 : 21,
+      ),
+      cyan,
+    );
+
+    final mouth = Paint()
+      ..color = cyan
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = state == RobotState.speaking ? 7 : 4
+      ..strokeCap = StrokeCap.round;
+
+    if (state == RobotState.happy) {
+      final p = Path()
+        ..moveTo(-25, 105)
+        ..quadraticBezierTo(0, 126, 25, 105);
+      c.drawPath(p, mouth);
+    } else if (state == RobotState.speaking) {
+      c.drawOval(
+        Rect.fromCenter(
+          center: const Offset(0, 108),
+          width: 29,
+          height: 13 + (math.sin(t * math.pi * 10).abs() * 8),
+        ),
+        mouth,
+      );
+    } else {
+      c.drawLine(const Offset(-21, 108), const Offset(21, 108), mouth);
+    }
+
+    // Legs
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(-63, 318, 46, 60),
+        const Radius.circular(16),
+      ),
+      dark,
+    );
+    c.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(17, 318, 46, 60),
+        const Radius.circular(16),
+      ),
+      dark,
+    );
+
     c.restore();
   }
 
   @override
-  bool shouldRepaint(covariant InteractiveRobotPainter oldDelegate) => true;
+  bool shouldRepaint(covariant RobotPainter oldDelegate) => true;
 }
 
 class CameraPage extends StatefulWidget {
   final CameraDescription camera;
   const CameraPage({super.key, required this.camera});
-  @override
-  State<CameraPage> createState() => _CameraPageState();
+  @override State<CameraPage> createState() => _CameraPageState();
 }
 
 class _CameraPageState extends State<CameraPage> {
   late final CameraController controller;
   late final Future<void> init;
+
   @override
   void initState() {
     super.initState();
@@ -696,11 +902,13 @@ class _CameraPageState extends State<CameraPage> {
     );
     init = controller.initialize();
   }
+
   @override
   void dispose() {
     controller.dispose();
     super.dispose();
   }
+
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('AI Vision')),
@@ -710,28 +918,63 @@ class _CameraPageState extends State<CameraPage> {
             if (snap.connectionState != ConnectionState.done) {
               return const Center(child: CircularProgressIndicator());
             }
-            if (snap.hasError) return Center(child: Text('Camera error: ${snap.error}'));
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                CameraPreview(controller),
-                Positioned(
-                  left: 20, right: 20, bottom: 25,
-                  child: FilledButton.icon(
-                    onPressed: () async {
-                      final photo = await controller.takePicture();
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Captured: ${photo.path}')),
-                      );
-                    },
-                    icon: const Icon(Icons.camera),
-                    label: const Text('Capture'),
-                  ),
-                ),
-              ],
-            );
+            if (snap.hasError) {
+              return Center(child: Text('Camera error: ${snap.error}'));
+            }
+            return CameraPreview(controller);
           },
+        ),
+      );
+}
+
+class CompassPage extends StatelessWidget {
+  const CompassPage({super.key});
+  @override
+  Widget build(BuildContext context) => const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.explore, size: 140, color: Colors.cyanAccent),
+              SizedBox(height: 16),
+              Text('Compass module ready'),
+              Text('Connect a device compass sensor for live heading.'),
+            ],
+          ),
+        ),
+      );
+}
+
+class WeatherDemoPage extends StatelessWidget {
+  const WeatherDemoPage({super.key});
+  @override
+  Widget build(BuildContext context) => const Scaffold(
+        body: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'Weather module is included in the v2 architecture. '
+              'A real provider can be enabled without placing secrets in the APK.',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+}
+
+class MapDemoPage extends StatelessWidget {
+  const MapDemoPage({super.key});
+  @override
+  Widget build(BuildContext context) => const Scaffold(
+        body: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'Maps / turn-by-turn module is included in the v2 architecture. '
+              'Google Maps requires your own Google Cloud project and API key.',
+              textAlign: TextAlign.center,
+            ),
+          ),
         ),
       );
 }
